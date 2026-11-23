@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Crave",
+    "slug": "crave",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/logo.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/images/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#00478D"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.crave.app"
+    },
+    "android": {
+      "package": "com.crave.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/logo.png",
+        "backgroundColor": "#00478D"
+      },
+      "softwareKeyboardLayoutMode": "pan"
+    }
+  }
+}
