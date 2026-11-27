@@ -5,12 +5,11 @@ import {
   FlatList,
   RefreshControl,
   TouchableOpacity,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radius, spacing } from '../../../theme';
+import { colors, spacing } from '../../../theme';
 import { CategoryItem, RestaurantItem } from '../../../types';
-import { CATEGORIES } from '../../../constants';
+import { CATEGORIES, RESTAURANTS_DATA } from '../../../constants';
 import { AppHeader, RestaurantCard } from '../../../components/shared';
 import { AppText, AppIcon } from '../../../components/ui';
 import { GreetingBar } from '../components/GreetingBar';
@@ -19,8 +18,6 @@ import { HeroBanner } from '../components/HeroBanner';
 import { CraveDeciderBanner } from '../components/CraveDeciderBanner';
 import { CategoryList } from '../components/CategoryList';
 import { useSavedStore, useRestaurantStore } from '../../../store';
-import { useNearbyRestaurantsQuery } from '../../../queries/useRestaurantsQuery';
-import { locationService } from '../../../services/location/locationService';
 import { useTranslation } from '../../../i18n';
 
 export interface HomeScreenProps {
@@ -37,40 +34,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('trending');
   const [submittedSearch, setSubmittedSearch] = useState<string>('');
   const [displayCount, setDisplayCount] = useState<number>(10);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
-  // ─── TanStack Query Integration ──────────────────────────────
-  const {
-    data: nearbyData,
-    isLoading,
-    isRefetching,
-    refetch,
-  } = useNearbyRestaurantsQuery({ limit: 50 });
-
-  const restaurants = nearbyData?.items || [];
-  const userLocation = nearbyData?.location;
+  // Sync RESTAURANTS_DATA to Zustand store once for other screens (FoodSwipe, RandomDecider)
+  useEffect(() => {
+    useRestaurantStore.setState({
+      restaurants: RESTAURANTS_DATA,
+      isLoading: false,
+    });
+  }, []);
 
   // Reset pagination when filter or search changes
   useEffect(() => {
     setDisplayCount(10);
   }, [selectedCategoryId, submittedSearch]);
 
-  // Sync with Zustand store for other screens (FoodSwipe, RandomDecider)
-  useEffect(() => {
-    if (nearbyData?.items && nearbyData.items.length > 0) {
-      useRestaurantStore.setState({
-        restaurants: nearbyData.items,
-        userLocation: nearbyData.location,
-      });
-    }
-  }, [nearbyData]);
-
   const toggleSaved = useSavedStore((state) => state.toggleSaved);
-  const isSaved = useSavedStore((state) => state.isSaved);
-
-  const handleRefreshLocation = () => {
-    locationService.clearCache();
-    refetch();
-  };
 
   const handleDecider = () => {
     if (onNavigateToDecider) {
@@ -106,37 +85,62 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     setSubmittedSearch('');
   }, []);
 
+  // Instant in-memory filter (No API delay, No 502, No timeouts)
   const filteredRestaurants = useMemo(() => {
-    return restaurants.filter((r) => {
+    return RESTAURANTS_DATA.filter((r) => {
       const matchesSearch =
         !submittedSearch ||
         r.name.toLowerCase().includes(submittedSearch.toLowerCase()) ||
         r.cuisine.toLowerCase().includes(submittedSearch.toLowerCase()) ||
-        (r.dishSpecialty && r.dishSpecialty.toLowerCase().includes(submittedSearch.toLowerCase()));
+        (r.dishSpecialty && r.dishSpecialty.toLowerCase().includes(submittedSearch.toLowerCase())) ||
+        (r.tags && r.tags.some((t) => t.toLowerCase().includes(submittedSearch.toLowerCase())));
 
       const matchesCategory =
         selectedCategoryId === 'trending' ||
-        (selectedCategoryId === 'pho' && (r.cuisine.toLowerCase().includes('vietnamese') || r.name.toLowerCase().includes('phở') || r.name.toLowerCase().includes('pho'))) ||
-        (selectedCategoryId === 'banh-mi' && (r.name.toLowerCase().includes('bánh mì') || r.name.toLowerCase().includes('banh mi') || r.cuisine.toLowerCase().includes('street food'))) ||
-        (selectedCategoryId === 'sushi' && (r.cuisine.toLowerCase().includes('japanese') || r.name.toLowerCase().includes('sushi'))) ||
-        (selectedCategoryId === 'coffee' && (r.cuisine.toLowerCase().includes('coffee') || r.cuisine.toLowerCase().includes('cafe') || r.name.toLowerCase().includes('cà phê'))) ||
-        (selectedCategoryId === 'healthy' && r.tags?.some((t) => t.toLowerCase().includes('authentic') || t.toLowerCase().includes('soup')));
+        (selectedCategoryId === 'pho' &&
+          (r.cuisine.toLowerCase().includes('vietnamese') ||
+            r.name.toLowerCase().includes('phở') ||
+            r.name.toLowerCase().includes('bún') ||
+            r.dishSpecialty?.toLowerCase().includes('phở') ||
+            r.dishSpecialty?.toLowerCase().includes('bún'))) ||
+        (selectedCategoryId === 'banh-mi' &&
+          (r.name.toLowerCase().includes('bánh') ||
+            r.cuisine.toLowerCase().includes('street food') ||
+            r.dishSpecialty?.toLowerCase().includes('bánh'))) ||
+        (selectedCategoryId === 'sushi' &&
+          (r.cuisine.toLowerCase().includes('japanese') ||
+            r.name.toLowerCase().includes('sushi') ||
+            r.name.toLowerCase().includes('ramen'))) ||
+        (selectedCategoryId === 'coffee' &&
+          (r.cuisine.toLowerCase().includes('coffee') ||
+            r.name.toLowerCase().includes('coffee') ||
+            r.name.toLowerCase().includes('cà phê'))) ||
+        (selectedCategoryId === 'healthy' &&
+          (r.cuisine.toLowerCase().includes('healthy') ||
+            r.name.toLowerCase().includes('healthy') ||
+            r.tags?.some((t) => t.toLowerCase().includes('fresh') || t.toLowerCase().includes('clean'))));
 
       return matchesSearch && matchesCategory;
     });
-  }, [restaurants, submittedSearch, selectedCategoryId]);
+  }, [submittedSearch, selectedCategoryId]);
 
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
-  const locationLabel = isLoading
-    ? t.home.locating
-    : (userLocation?.formattedAddress || 'TP. Hồ Chí Minh');
 
   const handleEndReached = useCallback(() => {
     if (displayCount < filteredRestaurants.length) {
       setDisplayCount((prev) => Math.min(prev + 10, filteredRestaurants.length));
     }
   }, [displayCount, filteredRestaurants.length]);
+
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    setSubmittedSearch('');
+    setDisplayCount(10);
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 400);
+  }, []);
 
   const keyExtractor = useCallback((item: RestaurantItem) => item.id, []);
 
@@ -157,9 +161,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     () => (
       <View>
         <GreetingBar
-          locationName={locationLabel}
-          isLoadingLocation={isLoading}
-          onLocationPress={handleRefreshLocation}
+          locationName="TP. Hồ Chí Minh"
+          isLoadingLocation={false}
         />
         <HomeSearchBar
           value={submittedSearch}
@@ -186,7 +189,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={() => { }}
+            onPress={() => setSelectedCategoryId('trending')}
             style={styles.seeAllButton}
           >
             <AppText variant="labelMedium" color={colors.primary}>
@@ -198,9 +201,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       </View>
     ),
     [
-      locationLabel,
-      isLoading,
-      handleRefreshLocation,
       submittedSearch,
       handleSearch,
       handleClearSearch,
@@ -214,64 +214,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   );
 
   const renderFooter = useCallback(() => {
-    if (isLoading) {
-      return (
-        <View style={styles.loadingContainer}>
-          <View style={styles.loadingHeader}>
-            <ActivityIndicator size="small" color={colors.primary} />
-            <AppText variant="labelMedium" color={colors.primary} style={styles.loadingText}>
-              {t.home.loadingPlaces}
-            </AppText>
-          </View>
-          {[1, 2].map((key) => (
-            <View key={key} style={styles.skeletonCard}>
-              <View style={styles.skeletonImage} />
-              <View style={styles.skeletonBody}>
-                <View style={styles.skeletonTitle} />
-                <View style={styles.skeletonSubtitle} />
-                <View style={styles.skeletonRow}>
-                  <View style={styles.skeletonBadge} />
-                  <View style={styles.skeletonBadge} />
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-      );
-    }
-
-    const hasMore = displayCount < filteredRestaurants.length;
-
-    if (hasMore) {
-      return (
-        <View style={styles.scrollLoadingFooter}>
-          <ActivityIndicator size="small" color={colors.primary} />
-          <AppText variant="labelMedium" color={colors.primary} style={styles.loadingMoreText}>
-            {t.home.loadingMore}
-          </AppText>
-        </View>
-      );
-    }
-
-    if (filteredRestaurants.length > 5) {
-      return (
-        <View style={styles.endOfListFooter}>
-          <AppIcon name="checkmark-circle-outline" size={16} color={colors.textLight} />
-          <AppText variant="labelSmall" color={colors.textLight} style={styles.endOfListText}>
-            {t.home.endOfList}
-          </AppText>
-        </View>
-      );
-    }
-
     return <View style={styles.bottomSpacer} />;
-  }, [isLoading, displayCount, filteredRestaurants.length, t.home.loadingPlaces, t.home.loadingMore, t.home.endOfList]);
+  }, []);
 
   const renderEmpty = useCallback(() => {
-    if (isLoading) return null;
     return (
       <View style={styles.emptyBox}>
-        <AppIcon name="search-outline" size={36} color={colors.textLight} />
+        <AppIcon name="search-outline" size={36} color={colors.textMuted} />
         <AppText variant="h4" color={colors.textSecondary} style={styles.emptyTitle}>
           {t.home.noCravingsFound}
         </AppText>
@@ -280,16 +229,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </AppText>
       </View>
     );
-  }, [isLoading, t.home.noCravingsFound, t.home.tryAnotherSearch]);
+  }, [t.home.noCravingsFound, t.home.tryAnotherSearch]);
 
-  const listData = isLoading ? [] : filteredRestaurants.slice(0, displayCount);
+  const listData = filteredRestaurants.slice(0, displayCount);
 
   return (
     <View style={styles.screen}>
-      {/* Sticky Blur Header */}
-      <AppHeader onProfilePress={() => navigation?.navigate('MainTabs', { screen: 'Profile' })} />
+      <AppHeader
+        onProfilePress={() => navigation?.navigate('MainTabs', { screen: 'Profile' })}
+      />
 
-      {/* Performant Virtualized FlatList Feed */}
       <FlatList
         data={listData}
         keyExtractor={keyExtractor}
@@ -300,12 +249,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         onEndReached={handleEndReached}
         onEndReachedThreshold={0.4}
         removeClippedSubviews={true}
-        initialNumToRender={5}
-        maxToRenderPerBatch={8}
+        initialNumToRender={6}
+        maxToRenderPerBatch={10}
         windowSize={5}
-        updateCellsBatchingPeriod={50}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
@@ -313,10 +259,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         ]}
         refreshControl={
           <RefreshControl
-            refreshing={isRefetching}
-            onRefresh={() => {
-              refetch();
-            }}
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
             tintColor={colors.primary}
             colors={[colors.primary]}
           />
@@ -350,103 +294,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
   },
-  scrollLoadingFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs + 2,
-    paddingVertical: spacing.md,
-    marginTop: spacing.xs,
-    marginBottom: spacing.base,
-  },
-  loadingMoreText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  endOfListFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.md,
-    marginTop: spacing.xs,
-    marginBottom: spacing.base,
-  },
-  endOfListText: {
-    fontSize: 12,
-  },
-  loadingContainer: {
-    marginHorizontal: spacing.lg,
-    marginVertical: spacing.sm,
-  },
-  loadingHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs + 2,
-    paddingVertical: spacing.md,
-    backgroundColor: 'rgba(23, 111, 242, 0.06)',
-    borderRadius: radius.md,
-    marginBottom: spacing.md,
-  },
-  loadingText: {
-    fontWeight: '600',
-  },
-  skeletonCard: {
-    backgroundColor: colors.bgWhite,
-    borderRadius: radius.xl,
-    overflow: 'hidden',
-    marginBottom: spacing.base,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  skeletonImage: {
-    width: '100%',
-    height: 155,
-    backgroundColor: '#E8EFF8',
-  },
-  skeletonBody: {
-    padding: spacing.base,
-    gap: spacing.sm,
-  },
-  skeletonTitle: {
-    width: '60%',
-    height: 20,
-    borderRadius: radius.sm,
-    backgroundColor: '#E8EFF8',
-  },
-  skeletonSubtitle: {
-    width: '85%',
-    height: 14,
-    borderRadius: radius.sm,
-    backgroundColor: '#F0F4FA',
-  },
-  skeletonRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
-  },
-  skeletonBadge: {
-    width: 70,
-    height: 22,
-    borderRadius: radius.full,
-    backgroundColor: '#F0F4FA',
+  bottomSpacer: {
+    height: spacing.xl,
   },
   emptyBox: {
-    marginHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.lg,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: spacing.xl,
+    marginHorizontal: spacing.lg,
     backgroundColor: colors.bgWhite,
     borderRadius: 16,
-    marginVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    marginTop: spacing.md,
   },
   emptyTitle: {
     marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  bottomSpacer: {
-    height: 100,
+    marginBottom: 4,
   },
 });
